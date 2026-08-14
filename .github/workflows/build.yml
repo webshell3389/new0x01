@@ -47,6 +47,18 @@ jobs:
             cp "$DLIB" ./coruna_hook.dylib
             touch ./HAS_DYLIB
           fi
+          echo "=== signing ==="
+          LDID=$(find "$THEOS" -name ldid -type f 2>/dev/null | head -1)
+          if [ -z "$LDID" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ldid 2>/dev/null || true
+            LDID=$(command -v ldid || true)
+          fi
+          if [ -n "$LDID" ] && [ -f ./coruna_hook.dylib ]; then
+            "$LDID" -S ./coruna_hook.dylib
+            echo "signed with $LDID"
+          else
+            echo "!! no ldid available, dylib unsigned"
+          fi
           exit $rc
 
       - name: Upload artifact
