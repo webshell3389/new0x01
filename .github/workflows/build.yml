@@ -1,0 +1,62 @@
+name: Build hook dylib
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Theos
+        uses: Randomblock1/theos-action@v1
+
+      - name: Build
+        id: build
+        run: |
+          make clean > /tmp/build.out 2>&1
+          set +e
+          make >> /tmp/build.out 2>&1
+          rc=$?
+          set -e
+          echo "make_rc=$rc" >> "$GITHUB_ENV"
+          echo "make rc=$rc"
+          echo "=== tail build.out ==="
+          tail -80 /tmp/build.out
+          {
+            echo "### Build rc=$rc"
+            echo '```'
+            grep -E "error:|Error |fatal|error generated|ld:|undefined" /tmp/build.out | head -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "=== .theos tree ==="
+          find .theos/obj -type f 2>/dev/null | head -40 || true
+          echo "=== candidate dylibs ==="
+          find .theos/obj -name "*.dylib" 2>/dev/null
+          DLIB=$(find .theos/obj -name "*.dylib" | head -1)
+          if [ -z "$DLIB" ]; then
+            echo "!! no dylib found"
+          else
+            echo "dylib: $DLIB"
+            cp "$DLIB" ./coruna_hook.dylib
+            touch ./HAS_DYLIB
+          fi
+          exit $rc
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coruna-hook-dylib
+          path: |
+            ./coruna_hook.dylib
+            ./HAS_DYLIB
+            /tmp/build.out
+          if-no-files-found: error
+          retention-days: 30
