@@ -7,6 +7,7 @@ LIBRARY_NAME = coruna_hook
 coruna_hook_FILES = Stage2Core.m
 coruna_hook_FRAMEWORKS = Foundation CFNetwork
 coruna_hook_CFLAGS = -fno-objc-arc -Wno-deprecated-declarations
+coruna_hook_LDFLAGS = -Wl,-no_warn_inits
 coruna_hook_INSTALL_PATH = /usr/lib
 coruna_hook_LINKAGE_TYPE = dynamic
 
