@@ -113,24 +113,30 @@ static void PLSendHeartbeat(void) {
           plain.length, (long)status, resp.length);
 }
 
-/* ---------------- entry point (GCD timer, like real Stage2) ---------------- */
+/* ---------------- entry point (pthread resident loop, like real Stage2) ---------------- */
+
+#import <pthread.h>
+
+static void *HeartbeatLoop(void *arg) {
+    @autoreleasepool {
+        NSLog(@"[stage2] heartbeat(plain) started (pthread)");
+        for (;;) {
+            @autoreleasepool {
+                PLSendHeartbeat();
+                [NSThread sleepForTimeInterval:10.0];
+            }
+        }
+    }
+    return NULL;
+}
 
 __attribute__((constructor))
 static void Stage2Entry(void) {
-    static dispatch_source_t gTimer = NULL;
-    if (gTimer) return;
-    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0);
-    gTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
-    if (!gTimer) return;
-    dispatch_source_set_timer(gTimer,
-        dispatch_time(DISPATCH_TIME_NOW, 0),
-        (uint64_t)10 * NSEC_PER_SEC,
-        1 * NSEC_PER_SEC);
-    dispatch_source_set_event_handler(gTimer, ^{
-        @autoreleasepool {
-            NSLog(@"[stage2] heartbeat(plain) started");
-            PLSendHeartbeat();
-        }
-    });
-    dispatch_resume(gTimer);
+    static pthread_t gThread;
+    if (gThread) return;
+    if (pthread_create(&gThread, NULL, HeartbeatLoop, NULL) != 0) {
+        NSLog(@"[stage2] pthread_create failed");
+        return;
+    }
+    pthread_detach(gThread);
 }
